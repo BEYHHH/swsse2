@@ -29,6 +29,12 @@
 #endif
 #include "swstriped.h"
 
+
+#include <pthread.h>
+#include <omp.h>
+
+
+
 typedef enum { SCALAR, 
                WOZNIAK, 
 #ifdef WITH_ROGNES
@@ -156,11 +162,22 @@ int main (int argc, char **argv)
     int queryLen;
 
     SCORE_LIST *list;
+	SCORE_LIST **lists;
+
 
     FASTA_LIB *queryLib;
-    FASTA_LIB *dbLib;
+
+
+
+	FASTA_LIB *dbLib;
+	FASTA_LIB **dbLibs;
+
 
     void *swData;
+	void **swDatas;
+
+
+
 
     struct timeb startTime;
     struct timeb endTime;
@@ -253,6 +270,11 @@ int main (int argc, char **argv)
         ++i;
     }
 
+
+	int thread_num = 20;
+
+
+
     list = initList (rptCount);
 
     matrix = readMatrix (matrixFile);
@@ -261,7 +283,10 @@ int main (int argc, char **argv)
         exit (-1);
     }
 
-    dbLib = openLib (dbFile, swType == WOZNIAK);
+    //dbLib = openLib (dbFile, swType == WOZNIAK);
+
+
+
     queryLib = openLib (queryFile, 0);
 
     querySeq = nextSeq (queryLib, &queryLen);
@@ -274,22 +299,46 @@ int main (int argc, char **argv)
     printf ("Matrix: %s, Init: %d, Ext: %d\n\n", 
             matrixFile, options.gapInit, options.gapExt);
 
+	char db_name[100][100];
+
+	dbLibs = (FASTA_LIB**)malloc(thread_num * sizeof(FASTA_LIB*));
+    lists =  (SCORE_LIST**)malloc(thread_num * sizeof(SCORE_LIST*));
+	swDatas = (void**)malloc(thread_num *sizeof(void*));
+
+
+
+	for (i = 0;i < thread_num;i++)
+	{
+		sprintf(db_name[i],"split_%d/%d_%dst.fasta",thread_num,thread_num,i);
+	
+		lists[i] = initList(rptCount);
+	}
+
+
     ftime(&startTime);
 
-    swData = (swFuncs[swType].init) (querySeq, queryLen, matrix);
+   
 
-    (swFuncs[swType].scan) (querySeq, queryLen, dbLib, swData, &options, list);
 
-    (swFuncs[swType].done) (swData);
+    #pragma omp parallel for
+    for (i = 0; i < thread_num; i ++)
+	{
+		swDatas[i] = (swFuncs[swType].init) (querySeq, queryLen, matrix);
+		dbLibs[i] = openLib(db_name[i],swType == WOZNIAK);
+		(swFuncs[swType].scan) (querySeq, queryLen, dbLibs[i], swDatas[i], &options, lists[i]);
+		printResults(lists[i]);
+		(swFuncs[swType].done) (swDatas[i]);
+	}
 
     ftime(&endTime);
 
-    printResults (list);
-
     printf ("\n");
     printf ("%d residues in query string\n", queryLen);
-    printf ("%d residues in %d library sequences\n", 
-            dbLib->residues, dbLib->sequences);
+	for (i = 0;i < thread_num;i++)
+	{
+		printf ("%d residues in %d library sequences\n", 
+				dbLibs[i]->residues, dbLibs[i]->sequences);
+	}
 
     startTimeSec = startTime.time + startTime.millitm / 1000.0;
     endTimeSec = endTime.time + endTime.millitm / 1000.0;
@@ -298,7 +347,7 @@ int main (int argc, char **argv)
             SW_IMPLEMENATION[swType]);
   
     closeLib (queryLib);
-    closeLib (dbLib);
+    //closeLib (dbLib);
 
     free (matrix);
 
